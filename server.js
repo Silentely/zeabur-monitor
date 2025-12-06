@@ -680,6 +680,50 @@ app.post('/api/project/rename', requireAuth, async (req, res) => {
   }
 });
 
+// 获取当前版本
+app.get('/api/version', (req, res) => {
+  const packageJson = require('./package.json');
+  res.json({ version: packageJson.version });
+});
+
+// 获取GitHub最新版本
+app.get('/api/latest-version', async (req, res) => {
+  try {
+    const options = {
+      hostname: 'raw.githubusercontent.com',
+      path: '/jiujiu532/zeabur-monitor/main/package.json',
+      method: 'GET',
+      timeout: 5000
+    };
+
+    const request = https.request(options, (response) => {
+      let data = '';
+      response.on('data', (chunk) => data += chunk);
+      response.on('end', () => {
+        try {
+          const packageJson = JSON.parse(data);
+          res.json({ version: packageJson.version });
+        } catch (e) {
+          res.status(500).json({ error: '解析版本信息失败' });
+        }
+      });
+    });
+
+    request.on('error', (error) => {
+      res.status(500).json({ error: '获取最新版本失败: ' + error.message });
+    });
+
+    request.on('timeout', () => {
+      request.destroy();
+      res.status(500).json({ error: '请求超时' });
+    });
+
+    request.end();
+  } catch (error) {
+    res.status(500).json({ error: '获取最新版本失败: ' + error.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`✨ Zeabur Monitor 运行在 http://localhost:${PORT}`);
   

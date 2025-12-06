@@ -507,7 +507,7 @@
       <div style="background: rgba(255,255,255,0.9); backdrop-filter: blur(10px); padding: 15px 18px; border-radius: 12px; margin-bottom: 15px; font-size: 13px; border: 1px solid rgba(255,255,255,0.3); box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
         <div style="font-weight: 700; margin-bottom: 8px; color: #f696c6;">💡 使用说明</div>
         <div style="line-height: 1.8; color: #555;">
-          • 数据每30秒自动刷新
+          • 数据每90秒自动刷新
         </div>
       </div>
       
@@ -521,6 +521,7 @@
         <button class="add-account-btn" @click="clearCache" style="background: rgba(255,100,100,0.3);">
           🗑️ 清除缓存
         </button>
+
         
         <!-- 透明度控制 -->
         <div style="display: flex; align-items: center; gap: 10px; background: rgba(255,255,255,0.2); backdrop-filter: blur(10px); padding: 8px 16px; border-radius: 25px; border: 1px solid rgba(255,255,255,0.3);">
@@ -535,7 +536,7 @@
           <span style="color: white; font-size: 13px; font-weight: 600; min-width: 35px;">{{ opacity }}%</span>
         </div>
         
-        <span style="color: white; font-size: 14px; margin-left: auto; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+        <span class="last-update-text" style="color: white; font-size: 14px; margin-left: auto; text-shadow: 0 2px 4px rgba(0,0,0,0.2);"></span>
           上次更新: {{ lastUpdate }}
         </span>
       </div>
@@ -725,27 +726,38 @@
         </div>
       </div>
       
-      <div v-if="accounts.length > 0" class="account-card" style="background: rgba(246, 150, 198, 0.3); backdrop-filter: blur(20px) saturate(180%); color: white; border: 1px solid rgba(255,255,255,0.3);">
-        <h3 style="margin-bottom: 15px; font-size: 20px; font-weight: 700;">✨ 总览</h3>
+      <div v-if="accounts.length > 0" class="account-card" :style="{
+        background: isSummaryWhiteMode ? 'rgba(255, 255, 255, 0.95)' : 'rgba(246, 150, 198, 0.3)',
+        backdropFilter: 'blur(20px) saturate(180%)',
+        color: isSummaryWhiteMode ? '#333' : 'white',
+        border: isSummaryWhiteMode ? '1px solid rgba(0,0,0,0.1)' : '1px solid rgba(255,255,255,0.3)',
+        transition: 'all 0.3s ease'
+      }">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+          <h3 style="font-size: 20px; font-weight: 700;">✨ 总览</h3>
+          <button @click="toggleSummaryBackground" style="padding: 6px 12px; background: rgba(0,0,0,0.1); border: 1px solid rgba(0,0,0,0.2); border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.2s;" :style="{ color: isSummaryWhiteMode ? '#666' : 'white' }">
+            {{ isSummaryWhiteMode ? '🎨 粉底' : '⬜ 白底' }}
+          </button>
+        </div>
         <div class="stats">
-          <div class="stat-box" style="background: transparent; border: 1px solid rgba(255,255,255,0.2);">
-            <div class="stat-label" style="color: rgba(255,255,255,0.9);">账号数</div>
+          <div class="stat-box" :style="{ background: 'transparent', border: isSummaryWhiteMode ? '1px solid rgba(0,0,0,0.1)' : '1px solid rgba(255,255,255,0.2)' }">
+            <div class="stat-label" :style="{ color: isSummaryWhiteMode ? '#666' : 'rgba(255,255,255,0.9)' }">账号数</div>
             <div class="stat-value" style="color: #4ade80;">{{ accounts.length }}</div>
           </div>
-          <div class="stat-box" style="background: transparent; border: 1px solid rgba(255,255,255,0.2);">
-            <div class="stat-label" style="color: rgba(255,255,255,0.9);">项目总数</div>
+          <div class="stat-box" :style="{ background: 'transparent', border: isSummaryWhiteMode ? '1px solid rgba(0,0,0,0.1)' : '1px solid rgba(255,255,255,0.2)' }">
+            <div class="stat-label" :style="{ color: isSummaryWhiteMode ? '#666' : 'rgba(255,255,255,0.9)' }">项目总数</div>
             <div class="stat-value" style="color: #4ade80;">{{ totalProjects }}</div>
           </div>
-          <div class="stat-box" style="background: transparent; border: 1px solid rgba(255,255,255,0.2);">
-            <div class="stat-label" style="color: rgba(255,255,255,0.9);">服务总数</div>
+          <div class="stat-box" :style="{ background: 'transparent', border: isSummaryWhiteMode ? '1px solid rgba(0,0,0,0.1)' : '1px solid rgba(255,255,255,0.2)' }">
+            <div class="stat-label" :style="{ color: isSummaryWhiteMode ? '#666' : 'rgba(255,255,255,0.9)' }">服务总数</div>
             <div class="stat-value" style="color: #4ade80;">{{ totalServices }}</div>
           </div>
-          <div class="stat-box" style="background: transparent; border: 1px solid rgba(255,255,255,0.2);">
-            <div class="stat-label" style="color: rgba(255,255,255,0.9);">运行中</div>
+          <div class="stat-box" :style="{ background: 'transparent', border: isSummaryWhiteMode ? '1px solid rgba(0,0,0,0.1)' : '1px solid rgba(255,255,255,0.2)' }">
+            <div class="stat-label" :style="{ color: isSummaryWhiteMode ? '#666' : 'rgba(255,255,255,0.9)' }">运行中</div>
             <div class="stat-value" style="color: #4ade80;">{{ runningServices }}</div>
           </div>
-          <div class="stat-box" style="background: transparent; border: 1px solid rgba(255,255,255,0.2);">
-            <div class="stat-label" style="color: rgba(255,255,255,0.9);">总费用</div>
+          <div class="stat-box" :style="{ background: 'transparent', border: isSummaryWhiteMode ? '1px solid rgba(0,0,0,0.1)' : '1px solid rgba(255,255,255,0.2)' }">
+            <div class="stat-label" :style="{ color: isSummaryWhiteMode ? '#666' : 'rgba(255,255,255,0.9)' }">总费用</div>
             <div class="stat-value" style="color: #ef4444;">${{ totalCost.toFixed(2) }}</div>
           </div>
         </div>
@@ -889,6 +901,36 @@
       <div v-if="!loading && accounts.length === 0" class="error">
         未配置账号或无法获取数据。请检查 .env 配置文件。
       </div>
+      
+      <!-- 项目地址和版本信息 -->
+      <div style="text-align: center; padding: 30px 20px;">
+        <div style="display: inline-block; background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 12px 24px; border-radius: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid rgba(246,150,198,0.3); font-size: 13px; margin-bottom: 15px;">
+          <span style="color: #666;">⭐ 项目地址：</span>
+          <a href="https://github.com/jiujiu532/zeabur-monitor" target="_blank" style="color: #f696c6; text-decoration: none; font-weight: 600; margin-left: 5px;">
+            github.com/jiujiu532/zeabur-monitor
+          </a>
+        </div>
+        
+        <!-- 版本信息 -->
+        <div style="display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
+          <div style="background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 12px 20px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid rgba(246,150,198,0.2); min-width: 120px; text-align: center;">
+            <div style="font-size: 18px; font-weight: 700; color: #f696c6; margin-bottom: 4px;">{{ currentVersion }}</div>
+            <div style="font-size: 11px; color: #999;">当前版本</div>
+          </div>
+          
+          <div style="background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 12px 20px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid rgba(246,150,198,0.2); min-width: 120px; text-align: center;">
+            <div style="font-size: 18px; font-weight: 700; color: #f696c6; margin-bottom: 4px;">{{ latestVersion }}</div>
+            <div style="font-size: 11px; color: #999;">最新版本</div>
+          </div>
+          
+          <div style="background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 12px 20px; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid rgba(246,150,198,0.2); min-width: 120px; text-align: center;">
+            <div v-if="versionLoading" style="font-size: 14px; color: #999; margin-bottom: 4px;">⏳ 检测中</div>
+            <div v-else-if="isNewVersionAvailable()" style="font-size: 14px; font-weight: 600; color: #ff9800; margin-bottom: 4px;">🔔 需要更新</div>
+            <div v-else style="font-size: 14px; font-weight: 600; color: #4ade80; margin-bottom: 4px;">✓ 已是最新</div>
+            <div style="font-size: 11px; color: #999;">更新状态</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -914,6 +956,7 @@
           addAccountError: '',
           addAccountSuccess: '',
           opacity: 39,
+          isSummaryWhiteMode: true,
           expandedAccounts: {},
           // 密码验证
           isAuthenticated: false,
@@ -934,10 +977,21 @@
           logsModalTitle: '',
           logsModalInfo: {},
           logsContent: '',
-          logsLoading: false
+          logsLoading: false,
+          // 版本信息
+          currentVersion: '加载中...',
+          latestVersion: '加载中...',
+          versionLoading: true
         };
       },
       async mounted() {
+        // 加载总览卡片背景模式设置
+        const savedMode = localStorage.getItem('summary_background_mode');
+        this.isSummaryWhiteMode = savedMode === null ? true : savedMode === 'white';
+        
+        // 获取版本信息（无论是否登录都获取）
+        this.fetchVersionInfo();
+        
         // 检查服务器是否已设置密码
         const hasPasswordResponse = await fetch('/api/check-password');
         const { hasPassword } = await hasPasswordResponse.json();
@@ -1063,7 +1117,7 @@
               this.fetchData();
               
               // 启动自动刷新
-              this.refreshInterval = setInterval(() => this.fetchData(), 30000);
+              this.refreshInterval = setInterval(() => this.fetchData(), 90000);
               
               // 加载透明度设置
               const savedOpacity = localStorage.getItem('card_opacity');
@@ -1102,7 +1156,7 @@
               this.fetchData();
               
               // 启动自动刷新
-              this.refreshInterval = setInterval(() => this.fetchData(), 30000);
+              this.refreshInterval = setInterval(() => this.fetchData(), 90000);
               
               // 加载透明度设置
               const savedOpacity = localStorage.getItem('card_opacity');
@@ -1478,6 +1532,10 @@
             this.fetchData();
           }
         },
+        toggleSummaryBackground() {
+          this.isSummaryWhiteMode = !this.isSummaryWhiteMode;
+          localStorage.setItem('summary_background_mode', this.isSummaryWhiteMode ? 'white' : 'pink');
+        },
         toggleAccount(accountName) {
           this.expandedAccounts[accountName] = !this.expandedAccounts[accountName];
         },
@@ -1722,21 +1780,58 @@
           } catch (error) {
             alert('❌ 操作失败: ' + error.message);
           }
+        },
+        // 获取版本信息
+        async fetchVersionInfo() {
+          try {
+            console.log('开始获取版本信息...');
+            const [currentRes, latestRes] = await Promise.all([
+              fetch('/api/version'),
+              fetch('/api/latest-version')
+            ]);
+            
+            const current = await currentRes.json();
+            const latest = await latestRes.json();
+            
+            console.log('当前版本:', current.version);
+            console.log('最新版本:', latest.version);
+            
+            this.currentVersion = current.version || '--';
+            this.latestVersion = latest.version || '--';
+            this.versionLoading = false;
+          } catch (error) {
+            console.error('获取版本信息失败:', error);
+            this.currentVersion = '--';
+            this.latestVersion = '--';
+            this.versionLoading = false;
+          }
+        },
+        // 比较版本号
+        isNewVersionAvailable() {
+          if (this.currentVersion === '--' || this.latestVersion === '--' || 
+              this.currentVersion === '加载中...' || this.latestVersion === '加载中...') {
+            return false;
+          }
+          
+          const parseCurrent = this.currentVersion.split('.').map(Number);
+          const parseLatest = this.latestVersion.split('.').map(Number);
+          
+          for (let i = 0; i < 3; i++) {
+            const current = parseCurrent[i] || 0;
+            const latest = parseLatest[i] || 0;
+            
+            if (latest > current) {
+              return true;
+            } else if (latest < current) {
+              return false;
+            }
+          }
+          
+          return false;
         }
       }
     }).mount('#app');
   </script>
-  
-
-  <!-- 项目来源 -->
-  <div style="text-align: center; padding: 30px 20px;">
-    <div style="display: inline-block; background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); padding: 12px 24px; border-radius: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); border: 1px solid rgba(246,150,198,0.3); font-size: 13px;">
-      <span style="color: #666;">⭐ 项目地址：</span>
-      <a href="https://github.com/jiujiu532/zeabur-monitor" target="_blank" style="color: #f696c6; text-decoration: none; font-weight: 600; margin-left: 5px;">
-        github.com/jiujiu532/zeabur-monitor
-      </a>
-    </div>
-  </div>
 
 </body>
 </html>
