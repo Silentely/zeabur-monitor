@@ -45,14 +45,20 @@ async function initDatabase() {
       ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false }
     });
 
-    // 测试连接
-    await pool.query('SELECT 1');
+    // 使用单个客户端连接来初始化，确保 search_path 设置生效
+    const client = await pool.connect();
+    try {
+      // 测试连接并设置 search_path
+      await client.query('SET search_path TO public');
+      await client.query('SELECT 1');
 
-    // 确保使用 public schema
-    await pool.query('SET search_path TO public');
+      // 创建表（在同一个连接上）
+      await createTablesWithClient(client);
 
-    // 创建表
-    await createTables();
+      console.log('✅ 数据库表已就绪');
+    } finally {
+      client.release();
+    }
 
     isDbEnabled = true;
     console.log('🐘 存储模式: PostgreSQL');
@@ -66,11 +72,11 @@ async function initDatabase() {
 }
 
 /**
- * 创建数据库表
+ * 创建数据库表（使用指定的客户端连接）
  */
-async function createTables() {
+async function createTablesWithClient(client) {
   // 用户表
-  await pool.query(`
+  await client.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       username VARCHAR(50) UNIQUE NOT NULL,
@@ -82,7 +88,7 @@ async function createTables() {
   `);
 
   // 账号表
-  await pool.query(`
+  await client.query(`
     CREATE TABLE IF NOT EXISTS accounts (
       id SERIAL PRIMARY KEY,
       user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -95,7 +101,7 @@ async function createTables() {
   `);
 
   // 配置表（存储系统配置）
-  await pool.query(`
+  await client.query(`
     CREATE TABLE IF NOT EXISTS config (
       key VARCHAR(255) PRIMARY KEY,
       value TEXT NOT NULL,
@@ -104,7 +110,7 @@ async function createTables() {
   `);
 
   // Webhook 表
-  await pool.query(`
+  await client.query(`
     CREATE TABLE IF NOT EXISTS webhooks (
       id VARCHAR(32) PRIMARY KEY,
       user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -118,7 +124,7 @@ async function createTables() {
   `);
 
   // 用量历史表
-  await pool.query(`
+  await client.query(`
     CREATE TABLE IF NOT EXISTS usage_history (
       id SERIAL PRIMARY KEY,
       account_name VARCHAR(255) NOT NULL,
@@ -128,12 +134,10 @@ async function createTables() {
   `);
 
   // 创建索引
-  await pool.query(`
+  await client.query(`
     CREATE INDEX IF NOT EXISTS idx_usage_history_account
     ON usage_history(account_name, recorded_at)
   `);
-
-  console.log('✅ 数据库表已就绪');
 }
 
 /**
