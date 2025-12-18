@@ -104,7 +104,10 @@ docker run -d \
 | `ACCOUNTS_SECRET` | Token 加密密钥（64位十六进制） | `openssl rand -hex 32` |
 | `ACCOUNTS` | 预配置账号 | `账号1:token1,账号2:token2` |
 | `DATABASE_URL` | PostgreSQL 连接字符串（可选） | `postgres://user:pass@host:5432/db` |
+| `DATABASE_SCHEMA` | 数据库 Schema（可选） | `public` |
 | `DATABASE_SSL` | 数据库 SSL 配置 | `true` / `false` |
+| `REDIS_URL` | Redis 连接字符串（可选） | `redis://localhost:6379` |
+| `REDIS_TLS` | Redis TLS 配置（可选） | `true` / `false` |
 
 #### 使用 PostgreSQL 持久化存储
 
@@ -116,6 +119,40 @@ docker compose -f docker-compose.postgres.yml up -d
 ```
 
 这将自动启动 PostgreSQL 数据库并配置应用连接。
+
+#### 使用 Redis 缓存和 Session 持久化
+
+配置 Redis 可以实现：
+- Session 持久化（重启后保持登录状态）
+- API 响应缓存（提升性能）
+
+**普通连接：**
+```bash
+REDIS_URL=redis://localhost:6379
+```
+
+**TLS 加密连接（云服务推荐）：**
+```bash
+# 方式 1：使用 rediss:// 协议（自动启用 TLS）
+REDIS_URL=rediss://user:password@redis-host:6380
+
+# 方式 2：显式启用 TLS
+REDIS_URL=redis://redis-host:6379
+REDIS_TLS=true
+```
+
+**高级 TLS 配置：**
+```bash
+# 自定义 CA 证书
+REDIS_TLS_CA=/path/to/ca.pem
+
+# 跳过证书验证（仅开发环境）
+REDIS_TLS_REJECT_UNAUTHORIZED=false
+
+# 连接超时配置
+REDIS_CONNECT_TIMEOUT=10000
+REDIS_COMMAND_TIMEOUT=5000
+```
 
 ### Zeabur 部署
 
@@ -160,6 +197,8 @@ docker compose -f docker-compose.postgres.yml up -d
 
 - **后端**：Node.js + Express
 - **前端**：Vue.js 3 (CDN)
+- **数据库**：PostgreSQL（可选）
+- **缓存**：Redis（可选，支持 TLS）
 - **API**：Zeabur GraphQL API
 - **样式**：原生 CSS（玻璃拟态效果）
 
@@ -173,11 +212,14 @@ zeabur-monitor/
 │   └── favicon.png     # 网站图标
 ├── server.js           # 后端服务
 ├── db.js               # 数据库存储模块
+├── redis-client.js     # Redis 客户端模块
+├── cache.js            # 缓存模块
+├── session-store.js    # Session 存储模块
 ├── crypto-utils.js     # 加密工具模块
 ├── package.json        # 项目配置
 ├── Dockerfile          # Docker 镜像配置
 ├── docker-compose.yml          # Docker Compose 配置（文件存储）
-├── docker-compose.postgres.yml # Docker Compose 配置（PostgreSQL）
+├── docker-compose.postgres.yml # Docker Compose 配置（PostgreSQL + Redis）
 ├── .dockerignore       # Docker 忽略规则
 ├── .env.example        # 环境变量示例
 ├── .gitignore          # Git 忽略规则
@@ -256,6 +298,9 @@ ACCOUNTS=账号1:token1,账号2:token2
 - `POST /api/service/pause` - 暂停服务
 - `POST /api/service/restart` - 重启服务
 - `POST /api/service/logs` - 获取服务日志
+- `GET /api/status` - 获取系统状态（数据库、Redis、缓存）
+- `GET /api/cache/stats` - 获取缓存统计
+- `DELETE /api/cache` - 清空缓存
 
 ## 🤝 贡献
 
