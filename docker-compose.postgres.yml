@@ -1,0 +1,49 @@
+# PostgreSQL 持久化存储配置
+# 使用方法: docker compose -f docker-compose.postgres.yml up -d
+
+services:
+  zeabur-monitor:
+    build: .
+    container_name: zeabur-monitor
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      # PostgreSQL 连接字符串
+      - DATABASE_URL=postgres://zeabur:zeabur123@postgres:5432/zeabur_monitor
+      # 禁用 SSL（内部网络通信）
+      - DATABASE_SSL=false
+      # Token 加密密钥（强烈推荐设置，64位十六进制）
+      - ACCOUNTS_SECRET=${ACCOUNTS_SECRET:-}
+      # 预配置账号（可选）
+      - ACCOUNTS=${ACCOUNTS:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: zeabur-monitor-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=zeabur
+      - POSTGRES_PASSWORD=zeabur123
+      - POSTGRES_DB=zeabur_monitor
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zeabur -d zeabur_monitor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres-data:

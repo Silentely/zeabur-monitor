@@ -5,6 +5,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const { encryptData, decryptData } = require('./crypto-utils');
+const db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -39,11 +40,11 @@ function cleanExpiredSessions() {
 setInterval(cleanExpiredSessions, 60 * 60 * 1000);
 
 // 密码验证中间件
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const password = req.headers['x-admin-password'];
   const sessionToken = req.headers['x-session-token'];
-  const savedPassword = loadAdminPassword();
-  
+  const savedPassword = await loadAdminPassword();
+
   if (!savedPassword) {
     // 如果没有设置密码，允许访问（首次设置）
     next();
@@ -65,96 +66,24 @@ function requireAuth(req, res, next) {
 
 app.use(express.static('public'));
 
-// 数据文件路径
-const ACCOUNTS_FILE = path.join(__dirname, 'accounts.json');
-const PASSWORD_FILE = path.join(__dirname, 'password.json');
-
-// 读取服务器存储的账号
-function loadServerAccounts() {
-  try {
-    if (fs.existsSync(ACCOUNTS_FILE)) {
-      const data = fs.readFileSync(ACCOUNTS_FILE, 'utf8');
-      const accounts = JSON.parse(data);
-      
-      // 如果启用了加密,解密 Token
-      if (ENCRYPTION_ENABLED) {
-        return accounts.map(account => {
-          // 如果账号有加密的 Token,解密它
-          if (account.encryptedToken) {
-            try {
-              const token = decryptData(account.encryptedToken, ACCOUNTS_SECRET);
-              return { ...account, token, encryptedToken: undefined };
-            } catch (e) {
-              console.error(`❌ 解密账号 [${account.name}] 的 Token 失败:`, e.message);
-              return account;
-            }
-          }
-          return account;
-        });
-      }
-      
-      return accounts;
-    }
-  } catch (e) {
-    console.error('❌ 读取账号文件失败:', e.message);
-  }
-  return [];
+// 读取服务器存储的账号（支持数据库或文件）
+async function loadServerAccounts() {
+  return await db.loadAccounts(ENCRYPTION_ENABLED, decryptData, ACCOUNTS_SECRET);
 }
 
-// 保存账号到服务器
-function saveServerAccounts(accounts) {
-  try {
-    let accountsToSave = accounts;
-    
-    // 如果启用了加密,加密 Token
-    if (ENCRYPTION_ENABLED) {
-      accountsToSave = accounts.map(account => {
-        if (account.token) {
-          try {
-            const encryptedToken = encryptData(account.token, ACCOUNTS_SECRET);
-            // 保存时移除明文 token,只保存加密后的
-            const { token, ...rest } = account;
-            return { ...rest, encryptedToken };
-          } catch (e) {
-            console.error(`❌ 加密账号 [${account.name}] 的 Token 失败:`, e.message);
-            return account;
-          }
-        }
-        return account;
-      });
-      console.log('🔐 账号 Token 已加密存储');
-    }
-    
-    fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify(accountsToSave, null, 2), 'utf8');
-    return true;
-  } catch (e) {
-    console.error('❌ 保存账号文件失败:', e.message);
-    return false;
-  }
+// 保存账号到服务器（支持数据库或文件）
+async function saveServerAccounts(accounts) {
+  return await db.saveAccounts(accounts, ENCRYPTION_ENABLED, encryptData, ACCOUNTS_SECRET);
 }
 
-// 读取管理员密码
-function loadAdminPassword() {
-  try {
-    if (fs.existsSync(PASSWORD_FILE)) {
-      const data = fs.readFileSync(PASSWORD_FILE, 'utf8');
-      return JSON.parse(data).password;
-    }
-  } catch (e) {
-    console.error('❌ 读取密码文件失败:', e.message);
-  }
-  return null;
+// 读取管理员密码（支持数据库或文件）
+async function loadAdminPassword() {
+  return await db.loadPassword();
 }
 
-// 保存管理员密码
-function saveAdminPassword(password) {
-  try {
-    fs.writeFileSync(PASSWORD_FILE, JSON.stringify({ password }, null, 2), 'utf8');
-    return true;
-  } catch (e) {
-    console.error('❌ 保存密码文件失败:', e.message);
-    return false;
-  }
+// 保存管理员密码（支持数据库或文件）
+async function saveAdminPassword(password) {
+  return await db.savePassword(password);
 }
 
 // Zeabur GraphQL 查询
@@ -544,25 +473,25 @@ app.get('/api/check-encryption', (req, res) => {
   });
 });
 
-app.get('/api/check-password', (req, res) => {
-  const savedPassword = loadAdminPassword();
+app.get('/api/check-password', async (req, res) => {
+  const savedPassword = await loadAdminPassword();
   res.json({ hasPassword: !!savedPassword });
 });
 
 // 设置管理员密码（首次）
-app.post('/api/set-password', (req, res) => {
+app.post('/api/set-password', async (req, res) => {
   const { password } = req.body;
-  const savedPassword = loadAdminPassword();
-  
+  const savedPassword = await loadAdminPassword();
+
   if (savedPassword) {
     return res.status(400).json({ error: '密码已设置，无法重复设置' });
   }
-  
+
   if (!password || password.length < 6) {
     return res.status(400).json({ error: '密码长度至少6位' });
   }
-  
-  if (saveAdminPassword(password)) {
+
+  if (await saveAdminPassword(password)) {
     console.log('✅ 管理员密码已设置');
     res.json({ success: true });
   } else {
@@ -571,14 +500,14 @@ app.post('/api/set-password', (req, res) => {
 });
 
 // 验证密码
-app.post('/api/verify-password', (req, res) => {
+app.post('/api/verify-password', async (req, res) => {
   const { password } = req.body;
-  const savedPassword = loadAdminPassword();
-  
+  const savedPassword = await loadAdminPassword();
+
   if (!savedPassword) {
     return res.status(400).json({ success: false, error: '请先设置密码' });
   }
-  
+
   if (password === savedPassword) {
     // 生成新的session token
     const sessionToken = generateToken();
@@ -592,9 +521,9 @@ app.post('/api/verify-password', (req, res) => {
 
 // 获取所有账号（服务器存储 + 环境变量）
 app.get('/api/server-accounts', requireAuth, async (req, res) => {
-  const serverAccounts = loadServerAccounts();
+  const serverAccounts = await loadServerAccounts();
   const envAccounts = getEnvAccounts();
-  
+
   // 合并账号，环境变量账号优先
   const allAccounts = [...envAccounts, ...serverAccounts];
   console.log(`📋 返回 ${allAccounts.length} 个账号 (环境变量: ${envAccounts.length}, 服务器: ${serverAccounts.length})`);
@@ -604,12 +533,12 @@ app.get('/api/server-accounts', requireAuth, async (req, res) => {
 // 保存账号到服务器
 app.post('/api/server-accounts', requireAuth, async (req, res) => {
   const { accounts } = req.body;
-  
+
   if (!accounts || !Array.isArray(accounts)) {
     return res.status(400).json({ error: '无效的账号列表' });
   }
-  
-  if (saveServerAccounts(accounts)) {
+
+  if (await saveServerAccounts(accounts)) {
     console.log(`✅ 保存 ${accounts.length} 个账号到服务器`);
     res.json({ success: true, message: '账号已保存到服务器' });
   } else {
@@ -620,11 +549,11 @@ app.post('/api/server-accounts', requireAuth, async (req, res) => {
 // 删除服务器账号
 app.delete('/api/server-accounts/:index', requireAuth, async (req, res) => {
   const index = parseInt(req.params.index);
-  const accounts = loadServerAccounts();
-  
+  const accounts = await loadServerAccounts();
+
   if (index >= 0 && index < accounts.length) {
     const removed = accounts.splice(index, 1);
-    if (saveServerAccounts(accounts)) {
+    if (await saveServerAccounts(accounts)) {
       console.log(`🗑️ 删除账号: ${removed[0].name}`);
       res.json({ success: true, message: '账号已删除' });
     } else {
@@ -738,16 +667,16 @@ app.post('/api/service/logs', requireAuth, express.json(), async (req, res) => {
 // 重命名项目
 app.post('/api/project/rename', requireAuth, async (req, res) => {
   const { accountId, projectId, newName } = req.body;
-  
+
   console.log(`📝 收到重命名请求: accountId=${accountId}, projectId=${projectId}, newName=${newName}`);
-  
+
   if (!accountId || !projectId || !newName) {
     return res.status(400).json({ error: '缺少必要参数' });
   }
-  
+
   try {
     // 从服务器存储中获取账号token
-    const serverAccounts = loadServerAccounts();
+    const serverAccounts = await loadServerAccounts();
     const account = serverAccounts.find(acc => (acc.id || acc.name) === accountId);
     
     if (!account || !account.token) {
@@ -817,31 +746,50 @@ app.get('/api/latest-version', async (req, res) => {
   }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✨ Zeabur Monitor 运行在 http://0.0.0.0:${PORT}`);
-  
-  // 显示加密状态
-  if (ENCRYPTION_ENABLED) {
-    console.log(`🔐 Token 加密存储: 已启用 (AES-256-GCM)`);
-  } else {
-    console.log(`⚠️  Token 加密存储: 未启用 (建议设置 ACCOUNTS_SECRET 环境变量)`);
-  }
-  
-  const envAccounts = getEnvAccounts();
-  const serverAccounts = loadServerAccounts();
-  const totalAccounts = envAccounts.length + serverAccounts.length;
-  
-  if (totalAccounts > 0) {
-    console.log(`📋 已加载 ${totalAccounts} 个账号`);
-    if (envAccounts.length > 0) {
-      console.log(`   环境变量: ${envAccounts.length} 个`);
-      envAccounts.forEach(acc => console.log(`     - ${acc.name}`));
+// 启动服务器
+async function startServer() {
+  // 初始化数据库（如果配置了 DATABASE_URL）
+  await db.initDatabase();
+
+  app.listen(PORT, '0.0.0.0', async () => {
+    console.log(`✨ Zeabur Monitor 运行在 http://0.0.0.0:${PORT}`);
+
+    // 显示存储模式
+    if (db.isDatabaseEnabled()) {
+      console.log(`🐘 数据存储: PostgreSQL`);
+    } else {
+      console.log(`📁 数据存储: 文件系统`);
     }
-    if (serverAccounts.length > 0) {
-      console.log(`   服务器存储: ${serverAccounts.length} 个`);
-      serverAccounts.forEach(acc => console.log(`     - ${acc.name}`));
+
+    // 显示加密状态
+    if (ENCRYPTION_ENABLED) {
+      console.log(`🔐 Token 加密存储: 已启用 (AES-256-GCM)`);
+    } else {
+      console.log(`⚠️  Token 加密存储: 未启用 (建议设置 ACCOUNTS_SECRET 环境变量)`);
     }
-  } else {
-    console.log(`📊 准备就绪，等待添加账号...`);
-  }
+
+    const envAccounts = getEnvAccounts();
+    const serverAccounts = await loadServerAccounts();
+    const totalAccounts = envAccounts.length + serverAccounts.length;
+
+    if (totalAccounts > 0) {
+      console.log(`📋 已加载 ${totalAccounts} 个账号`);
+      if (envAccounts.length > 0) {
+        console.log(`   环境变量: ${envAccounts.length} 个`);
+        envAccounts.forEach(acc => console.log(`     - ${acc.name}`));
+      }
+      if (serverAccounts.length > 0) {
+        console.log(`   服务器存储: ${serverAccounts.length} 个`);
+        serverAccounts.forEach(acc => console.log(`     - ${acc.name}`));
+      }
+    } else {
+      console.log(`📊 准备就绪，等待添加账号...`);
+    }
+  });
+}
+
+// 启动
+startServer().catch(err => {
+  console.error('❌ 启动失败:', err.message);
+  process.exit(1);
 });

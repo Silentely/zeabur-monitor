@@ -24,6 +24,9 @@ Thumbs.db
 .kiro/
 *.swp
 *.swo
+.claude
+.codex
+.serena
 
 # 临时文件
 *.tmp

@@ -1,3 +1,6 @@
+# 基础配置（文件存储）
+# 使用方法: docker compose up -d
+
 services:
   zeabur-monitor:
     build: .
@@ -16,7 +19,7 @@ services:
     volumes:
       # 持久化数据存储
       - zeabur-data:/app/data
-      # 账号和密码文件映射（可选，用于数据持久化）
+      # 账号和密码文件映射（用于数据持久化）
       - ./accounts.json:/app/accounts.json:rw
       - ./password.json:/app/password.json:rw
     healthcheck:

@@ -103,6 +103,19 @@ docker run -d \
 | `PORT` | 服务端口 | `3000` |
 | `ACCOUNTS_SECRET` | Token 加密密钥（64位十六进制） | `openssl rand -hex 32` |
 | `ACCOUNTS` | 预配置账号 | `账号1:token1,账号2:token2` |
+| `DATABASE_URL` | PostgreSQL 连接字符串（可选） | `postgres://user:pass@host:5432/db` |
+| `DATABASE_SSL` | 数据库 SSL 配置 | `true` / `false` |
+
+#### 使用 PostgreSQL 持久化存储
+
+如果需要更可靠的数据持久化，可以使用 PostgreSQL：
+
+```bash
+# 使用 PostgreSQL 配置启动
+docker compose -f docker-compose.postgres.yml up -d
+```
+
+这将自动启动 PostgreSQL 数据库并配置应用连接。
 
 ### Zeabur 部署
 
@@ -159,10 +172,12 @@ zeabur-monitor/
 │   ├── bg.png          # 背景图片
 │   └── favicon.png     # 网站图标
 ├── server.js           # 后端服务
+├── db.js               # 数据库存储模块
 ├── crypto-utils.js     # 加密工具模块
 ├── package.json        # 项目配置
 ├── Dockerfile          # Docker 镜像配置
-├── docker-compose.yml  # Docker Compose 配置
+├── docker-compose.yml          # Docker Compose 配置（文件存储）
+├── docker-compose.postgres.yml # Docker Compose 配置（PostgreSQL）
 ├── .dockerignore       # Docker 忽略规则
 ├── .env.example        # 环境变量示例
 ├── .gitignore          # Git 忽略规则
@@ -175,13 +190,18 @@ zeabur-monitor/
 
 ### 密码保护
 - 首次使用需要设置管理员密码（至少 6 位）
-- 密码存储在服务器的 `password.json` 文件中
+- 密码存储在服务器（文件或数据库）
 - 登录后 10 天内自动保持登录状态
 
 ### API Token 安全
-- Token 存储在服务器的 `accounts.json` 文件中
+- Token 存储在服务器（文件或数据库）
+- 支持 AES-256-GCM 加密存储
 - 输入时自动打码显示（`●●●●●●`）
 - 不会暴露在前端代码或浏览器中
+
+### 数据存储
+- **文件存储**（默认）：数据保存在 `accounts.json` 和 `password.json`
+- **PostgreSQL**（可选）：配置 `DATABASE_URL` 后自动切换，支持更可靠的持久化
 
 ### 重要提示
 ⚠️ **请勿将以下文件提交到 Git：**
