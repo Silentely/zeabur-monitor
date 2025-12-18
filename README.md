@@ -3,6 +3,7 @@
 一个美观、强大的 Zeabur 多账号监控工具，实时显示免费额度使用情况、项目费用和服务状态。
 
 ![](https://img.shields.io/badge/Node.js-18+-green.svg)
+![](https://img.shields.io/badge/Docker-Ready-blue.svg)
 ![](https://img.shields.io/badge/License-MIT-blue.svg)
 ![](https://img.shields.io/badge/Zeabur-Ready-blueviolet.svg)
 
@@ -55,7 +56,55 @@ npm start
 # 打开浏览器访问：http://localhost:3000
 ```
 
-### Zeabur 部署（推荐）
+### Docker 部署
+
+#### 使用 Docker Compose（推荐）
+
+```bash
+# 1. 克隆项目
+git clone https://github.com/jiujiu532/zeabur-monitor.git
+cd zeabur-monitor
+
+# 2. 创建数据文件（首次运行）
+touch accounts.json password.json
+
+# 3. 配置环境变量（可选）
+# 生成加密密钥
+openssl rand -hex 32
+# 创建 .env 文件并设置 ACCOUNTS_SECRET
+
+# 4. 启动服务
+docker compose up -d
+
+# 5. 访问应用
+# 打开浏览器访问：http://localhost:3000
+```
+
+#### 使用 Docker 命令
+
+```bash
+# 构建镜像
+docker build -t zeabur-monitor .
+
+# 运行容器
+docker run -d \
+  --name zeabur-monitor \
+  -p 3000:3000 \
+  -v $(pwd)/accounts.json:/app/accounts.json \
+  -v $(pwd)/password.json:/app/password.json \
+  -e ACCOUNTS_SECRET=your_64_char_hex_key \
+  zeabur-monitor
+```
+
+#### Docker 环境变量说明
+
+| 变量名 | 说明 | 示例 |
+|--------|------|------|
+| `PORT` | 服务端口 | `3000` |
+| `ACCOUNTS_SECRET` | Token 加密密钥（64位十六进制） | `openssl rand -hex 32` |
+| `ACCOUNTS` | 预配置账号 | `账号1:token1,账号2:token2` |
+
+### Zeabur 部署
 
 详细部署步骤请查看 [DEPLOY.md](./DEPLOY.md)
 
@@ -110,7 +159,11 @@ zeabur-monitor/
 │   ├── bg.png          # 背景图片
 │   └── favicon.png     # 网站图标
 ├── server.js           # 后端服务
+├── crypto-utils.js     # 加密工具模块
 ├── package.json        # 项目配置
+├── Dockerfile          # Docker 镜像配置
+├── docker-compose.yml  # Docker Compose 配置
+├── .dockerignore       # Docker 忽略规则
 ├── .env.example        # 环境变量示例
 ├── .gitignore          # Git 忽略规则
 ├── zbpack.json         # Zeabur 配置

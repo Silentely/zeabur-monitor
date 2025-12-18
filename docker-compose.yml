@@ -1,0 +1,30 @@
+services:
+  zeabur-monitor:
+    build: .
+    container_name: zeabur-monitor
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      # Token 加密密钥（强烈推荐设置，64位十六进制）
+      # 可使用 openssl rand -hex 32 生成
+      - ACCOUNTS_SECRET=${ACCOUNTS_SECRET:-}
+      # 预配置账号（可选）
+      # 格式: 账号名称:API_TOKEN,账号2:TOKEN2
+      - ACCOUNTS=${ACCOUNTS:-}
+    volumes:
+      # 持久化数据存储
+      - zeabur-data:/app/data
+      # 账号和密码文件映射（可选，用于数据持久化）
+      - ./accounts.json:/app/accounts.json:rw
+      - ./password.json:/app/password.json:rw
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  zeabur-data:

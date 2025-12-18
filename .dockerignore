@@ -1,0 +1,40 @@
+# 依赖
+node_modules/
+npm-debug.log*
+
+# Git
+.git/
+.gitignore
+
+# 环境变量和敏感数据
+.env
+.env.*
+accounts.json
+password.json
+
+# 文档
+*.md
+DEPLOY.md
+LICENSE
+
+# IDE 和编辑器
+.vscode/
+.idea/
+.kiro/
+*.swp
+*.swo
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+.cache/
+*.log
+
+# Zeabur 配置（Docker 部署不需要）
+zbpack.json
+
+# 开发工具
+.claude/
