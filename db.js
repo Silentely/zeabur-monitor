@@ -48,6 +48,9 @@ async function initDatabase() {
     // 测试连接
     await pool.query('SELECT 1');
 
+    // 确保使用 public schema
+    await pool.query('SET search_path TO public');
+
     // 创建表
     await createTables();
 
