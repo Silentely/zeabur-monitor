@@ -2,91 +2,97 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const https = require('https');
-const fs = require('fs');
-const path = require('path');
 const { encryptData, decryptData } = require('./crypto-utils');
+const { hashPassword, verifyPassword, isHashed } = require('./password-utils');
+const { initSessionStore, createSession, validateSession, destroySession, isRedisSessionEnabled } = require('./session-store');
+const { apiLimiter, loginLimiter, passwordSetLimiter, validatePassword, validateAccounts, validateIndex, validateRename, validateServiceAction, validateLogsQuery, validateWebhook } = require('./middleware');
+const { setWebhookConfigs, sendWebhook, testWebhook, EVENTS } = require('./notifications');
 const db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 加密密钥（用于加密存储的 API Token）
+// 加密密钥
 const ACCOUNTS_SECRET = process.env.ACCOUNTS_SECRET;
 const ENCRYPTION_ENABLED = ACCOUNTS_SECRET && ACCOUNTS_SECRET.length === 64;
 
+// 额度预警阈值
+const QUOTA_WARNING_THRESHOLD = parseFloat(process.env.QUOTA_WARNING_THRESHOLD) || 1.0;
+
 app.use(cors());
 app.use(express.json());
+app.use(apiLimiter); // 全局限流
 
-// Session管理 - 存储在内存中,重启服务器后清空
-const activeSessions = new Map(); // { token: { createdAt: timestamp } }
-const SESSION_DURATION = 10 * 24 * 60 * 60 * 1000; // 10天
+// ==================== 辅助函数 ====================
 
-// 生成随机token
-function generateToken() {
-  return 'session_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+async function loadServerAccounts() {
+  return await db.loadAccounts(ENCRYPTION_ENABLED, decryptData, ACCOUNTS_SECRET);
 }
 
-// 清理过期session
-function cleanExpiredSessions() {
-  const now = Date.now();
-  for (const [token, session] of activeSessions.entries()) {
-    if (now - session.createdAt > SESSION_DURATION) {
-      activeSessions.delete(token);
-    }
+async function saveServerAccounts(accounts) {
+  return await db.saveAccounts(accounts, ENCRYPTION_ENABLED, encryptData, ACCOUNTS_SECRET);
+}
+
+async function loadAdminPassword() {
+  return await db.loadPassword();
+}
+
+async function saveAdminPassword(password) {
+  const hashed = await hashPassword(password);
+  return await db.savePassword(hashed);
+}
+
+function getEnvAccounts() {
+  const accountsEnv = process.env.ACCOUNTS;
+  if (!accountsEnv) return [];
+  try {
+    return accountsEnv.split(',').map(item => {
+      const [name, token] = item.split(':');
+      return { name: name.trim(), token: token.trim() };
+    }).filter(acc => acc.name && acc.token);
+  } catch (e) {
+    console.error('❌ 解析环境变量 ACCOUNTS 失败:', e.message);
+    return [];
   }
 }
 
-// 每小时清理一次过期session
-setInterval(cleanExpiredSessions, 60 * 60 * 1000);
+// ==================== 认证中间件 ====================
 
-// 密码验证中间件
 async function requireAuth(req, res, next) {
   const password = req.headers['x-admin-password'];
   const sessionToken = req.headers['x-session-token'];
   const savedPassword = await loadAdminPassword();
 
   if (!savedPassword) {
-    // 如果没有设置密码，允许访问（首次设置）
-    next();
-  } else if (sessionToken && activeSessions.has(sessionToken)) {
-    // 检查session是否有效
-    const session = activeSessions.get(sessionToken);
-    if (Date.now() - session.createdAt < SESSION_DURATION) {
-      next();
-    } else {
-      activeSessions.delete(sessionToken);
-      res.status(401).json({ error: 'Session已过期，请重新登录' });
-    }
-  } else if (password === savedPassword) {
-    next();
-  } else {
-    res.status(401).json({ error: '密码错误或Session无效' });
+    return next();
   }
+
+  // 验证 Session
+  if (sessionToken) {
+    const session = await validateSession(sessionToken);
+    if (session) {
+      req.session = session;
+      return next();
+    }
+  }
+
+  // 验证密码
+  if (password) {
+    const isValid = await verifyPassword(password, savedPassword);
+    if (isValid) {
+      return next();
+    }
+  }
+
+  res.status(401).json({ error: '密码错误或Session无效' });
 }
+
+// ==================== 静态文件 ====================
 
 app.use(express.static('public'));
 
-// 读取服务器存储的账号（支持数据库或文件）
-async function loadServerAccounts() {
-  return await db.loadAccounts(ENCRYPTION_ENABLED, decryptData, ACCOUNTS_SECRET);
-}
+// ==================== Zeabur API ====================
 
-// 保存账号到服务器（支持数据库或文件）
-async function saveServerAccounts(accounts) {
-  return await db.saveAccounts(accounts, ENCRYPTION_ENABLED, encryptData, ACCOUNTS_SECRET);
-}
-
-// 读取管理员密码（支持数据库或文件）
-async function loadAdminPassword() {
-  return await db.loadPassword();
-}
-
-// 保存管理员密码（支持数据库或文件）
-async function saveAdminPassword(password) {
-  return await db.savePassword(password);
-}
-
-// Zeabur GraphQL 查询
 async function queryZeabur(token, query) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify({ query });
@@ -124,74 +130,32 @@ async function queryZeabur(token, query) {
   });
 }
 
-// 获取用户信息和项目
 async function fetchAccountData(token) {
-  // 查询用户信息
-  const userQuery = `
-    query {
-      me {
-        _id
-        username
-        email
-        credit
-      }
-    }
-  `;
-  
-  // 查询项目信息
-  const projectsQuery = `
-    query {
-      projects {
-        edges {
-          node {
-            _id
-            name
-            region {
-              name
-            }
-            environments {
-              _id
-            }
-            services {
-              _id
-              name
-              status
-              template
-              resourceLimit {
-                cpu
-                memory
-              }
-              domains {
-                domain
-                isGenerated
-              }
-            }
+  const userQuery = `query { me { _id username email credit } }`;
+  const projectsQuery = `query {
+    projects {
+      edges {
+        node {
+          _id name
+          region { name }
+          environments { _id }
+          services {
+            _id name status template
+            resourceLimit { cpu memory }
+            domains { domain isGenerated }
           }
         }
       }
     }
-  `;
-  
-  // 查询 AI Hub 余额
-  const aihubQuery = `
-    query GetAIHubTenant {
-      aihubTenant {
-        balance
-        keys {
-          keyID
-          alias
-          cost
-        }
-      }
-    }
-  `;
-  
+  }`;
+  const aihubQuery = `query GetAIHubTenant { aihubTenant { balance keys { keyID alias cost } } }`;
+
   const [userData, projectsData, aihubData] = await Promise.all([
     queryZeabur(token, userQuery),
     queryZeabur(token, projectsQuery),
     queryZeabur(token, aihubQuery).catch(() => ({ data: { aihubTenant: null } }))
   ]);
-  
+
   return {
     user: userData.data?.me || {},
     projects: (projectsData.data?.projects?.edges || []).map(edge => edge.node),
@@ -199,60 +163,30 @@ async function fetchAccountData(token) {
   };
 }
 
-// 获取项目用量数据
 async function fetchUsageData(token, userID, projects = []) {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth() + 1;
   const fromDate = `${year}-${String(month).padStart(2, '0')}-01`;
-  // 使用明天的日期确保包含今天的所有数据
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
   const toDate = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
-  
+
   const usageQuery = {
     operationName: 'GetHeaderMonthlyUsage',
-    variables: {
-      from: fromDate,
-      to: toDate,
-      groupByEntity: 'PROJECT',
-      groupByTime: 'DAY',
-      groupByType: 'ALL',
-      userID: userID
-    },
+    variables: { from: fromDate, to: toDate, groupByEntity: 'PROJECT', groupByTime: 'DAY', groupByType: 'ALL', userID },
     query: `query GetHeaderMonthlyUsage($from: String!, $to: String!, $groupByEntity: GroupByEntity, $groupByTime: GroupByTime, $groupByType: GroupByType, $userID: ObjectID!) {
-      usages(
-        from: $from
-        to: $to
-        groupByEntity: $groupByEntity
-        groupByTime: $groupByTime
-        groupByType: $groupByType
-        userID: $userID
-      ) {
-        categories
-        data {
-          id
-          name
-          groupByEntity
-          usageOfEntity
-          __typename
-        }
-        __typename
+      usages(from: $from, to: $to, groupByEntity: $groupByEntity, groupByTime: $groupByTime, groupByType: $groupByType, userID: $userID) {
+        categories data { id name groupByEntity usageOfEntity __typename } __typename
       }
     }`
   };
-  
+
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(usageQuery);
     const options = {
-      hostname: 'api.zeabur.com',
-      path: '/graphql',
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(data)
-      },
+      hostname: 'api.zeabur.com', path: '/graphql', method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
       timeout: 10000
     };
 
@@ -263,24 +197,19 @@ async function fetchUsageData(token, userID, projects = []) {
         try {
           const result = JSON.parse(body);
           const usages = result.data?.usages?.data || [];
-          
-          // 计算每个项目的总费用
           const projectCosts = {};
           let totalUsage = 0;
-          
+
           usages.forEach(project => {
             const projectTotal = project.usageOfEntity.reduce((a, b) => a + b, 0);
-            // 单个项目显示：向上取整到 $0.01（与 Zeabur 官方一致）
             const displayCost = projectTotal > 0 ? Math.ceil(projectTotal * 100) / 100 : 0;
             projectCosts[project.id] = displayCost;
-            // 总用量计算：使用原始费用（不取整，保证总余额准确）
             totalUsage += projectTotal;
           });
-          
+
           resolve({
-            projectCosts,
-            totalUsage,
-            freeQuotaRemaining: 5 - totalUsage, // 免费额度 $5
+            projectCosts, totalUsage,
+            freeQuotaRemaining: 5 - totalUsage,
             freeQuotaLimit: 5
           });
         } catch (e) {
@@ -290,186 +219,19 @@ async function fetchUsageData(token, userID, projects = []) {
     });
 
     req.on('error', reject);
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('Request timeout'));
-    });
+    req.on('timeout', () => { req.destroy(); reject(new Error('Request timeout')); });
     req.write(data);
     req.end();
   });
 }
 
-// 临时账号API - 获取账号信息
-app.post('/api/temp-accounts', requireAuth, express.json(), async (req, res) => {
-  const { accounts } = req.body;
-  
-  console.log('📥 收到账号请求:', accounts?.length, '个账号');
-  
-  if (!accounts || !Array.isArray(accounts)) {
-    return res.status(400).json({ error: '无效的账号列表' });
-  }
-  
-  const results = await Promise.all(accounts.map(async (account) => {
-    try {
-      console.log(`🔍 正在获取账号 [${account.name}] 的数据...`);
-      const { user, projects, aihub } = await fetchAccountData(account.token);
-      console.log(`   API 返回的 credit: ${user.credit}`);
-      
-      // 获取用量数据
-      let usageData = { totalUsage: 0, freeQuotaRemaining: 5, freeQuotaLimit: 5 };
-      if (user._id) {
-        try {
-          usageData = await fetchUsageData(account.token, user._id, projects);
-          console.log(`💰 [${account.name}] 用量: $${usageData.totalUsage.toFixed(2)}, 剩余: $${usageData.freeQuotaRemaining.toFixed(2)}`);
-        } catch (e) {
-          console.log(`⚠️ [${account.name}] 获取用量失败:`, e.message);
-        }
-      }
-      
-      // 计算剩余额度并转换为 credit（以分为单位）
-      const creditInCents = Math.round(usageData.freeQuotaRemaining * 100);
-      
-      return {
-        name: account.name,
-        success: true,
-        data: {
-          ...user,
-          credit: creditInCents, // 使用计算的剩余额度
-          totalUsage: usageData.totalUsage,
-          freeQuotaLimit: usageData.freeQuotaLimit
-        },
-        aihub: aihub
-      };
-    } catch (error) {
-      console.error(`❌ [${account.name}] 错误:`, error.message);
-      return {
-        name: account.name,
-        success: false,
-        error: error.message
-      };
-    }
-  }));
-  
-  console.log('📤 返回结果:', results.length, '个账号');
-  res.json(results);
-});
+// ==================== 密码 API ====================
 
-// 临时账号API - 获取项目信息
-app.post('/api/temp-projects', requireAuth, express.json(), async (req, res) => {
-  const { accounts } = req.body;
-  
-  console.log('📥 收到项目请求:', accounts?.length, '个账号');
-  
-  if (!accounts || !Array.isArray(accounts)) {
-    return res.status(400).json({ error: '无效的账号列表' });
-  }
-  
-  const results = await Promise.all(accounts.map(async (account) => {
-    try {
-      console.log(`🔍 正在获取账号 [${account.name}] 的项目...`);
-      const { user, projects } = await fetchAccountData(account.token);
-      
-      // 获取用量数据
-      let projectCosts = {};
-      if (user._id) {
-        try {
-          const usageData = await fetchUsageData(account.token, user._id, projects);
-          projectCosts = usageData.projectCosts;
-        } catch (e) {
-          console.log(`⚠️ [${account.name}] 获取用量失败:`, e.message);
-        }
-      }
-      
-      console.log(`📦 [${account.name}] 找到 ${projects.length} 个项目`);
-      
-      const projectsWithCost = projects.map(project => {
-        const cost = projectCosts[project._id] || 0;
-        console.log(`  - ${project.name}: $${cost.toFixed(2)}`);
-        
-        return {
-          _id: project._id,
-          name: project.name,
-          region: project.region?.name || 'Unknown',
-          environments: project.environments || [],
-          services: project.services || [],
-          cost: cost,
-          hasCostData: cost > 0
-        };
-      });
-      
-      return {
-        name: account.name,
-        success: true,
-        projects: projectsWithCost
-      };
-    } catch (error) {
-      console.error(`❌ [${account.name}] 错误:`, error.message);
-      return {
-        name: account.name,
-        success: false,
-        error: error.message
-      };
-    }
-  }));
-  
-  console.log('📤 返回项目结果');
-  res.json(results);
-});
-
-// 验证账号
-app.post('/api/validate-account', requireAuth, express.json(), async (req, res) => {
-  const { accountName, apiToken } = req.body;
-  
-  if (!accountName || !apiToken) {
-    return res.status(400).json({ error: '账号名称和 API Token 不能为空' });
-  }
-  
-  try {
-    const { user } = await fetchAccountData(apiToken);
-    
-    if (user._id) {
-      res.json({
-        success: true,
-        message: '账号验证成功！',
-        userData: user,
-        accountName,
-        apiToken
-      });
-    } else {
-      res.status(400).json({ error: 'API Token 无效或没有权限' });
-    }
-  } catch (error) {
-    res.status(400).json({ error: 'API Token 验证失败: ' + error.message });
-  }
-});
-
-// 从环境变量读取预配置的账号
-function getEnvAccounts() {
-  const accountsEnv = process.env.ACCOUNTS;
-  if (!accountsEnv) return [];
-  
-  try {
-    // 格式: "账号1名称:token1,账号2名称:token2"
-    return accountsEnv.split(',').map(item => {
-      const [name, token] = item.split(':');
-      return { name: name.trim(), token: token.trim() };
-    }).filter(acc => acc.name && acc.token);
-  } catch (e) {
-    console.error('❌ 解析环境变量 ACCOUNTS 失败:', e.message);
-    return [];
-  }
-}
-
-// 检查是否已设置密码
-// 检查加密密钥是否已设置
 app.get('/api/check-encryption', (req, res) => {
   const crypto = require('crypto');
-  // 生成一个随机密钥供用户使用
-  const suggestedSecret = crypto.randomBytes(32).toString('hex');
-  
   res.json({
     isConfigured: ENCRYPTION_ENABLED,
-    suggestedSecret: suggestedSecret
+    suggestedSecret: crypto.randomBytes(32).toString('hex')
   });
 });
 
@@ -478,8 +240,7 @@ app.get('/api/check-password', async (req, res) => {
   res.json({ hasPassword: !!savedPassword });
 });
 
-// 设置管理员密码（首次）
-app.post('/api/set-password', async (req, res) => {
+app.post('/api/set-password', passwordSetLimiter, validatePassword, async (req, res) => {
   const { password } = req.body;
   const savedPassword = await loadAdminPassword();
 
@@ -487,20 +248,15 @@ app.post('/api/set-password', async (req, res) => {
     return res.status(400).json({ error: '密码已设置，无法重复设置' });
   }
 
-  if (!password || password.length < 6) {
-    return res.status(400).json({ error: '密码长度至少6位' });
-  }
-
   if (await saveAdminPassword(password)) {
-    console.log('✅ 管理员密码已设置');
+    console.log('✅ 管理员密码已设置（已哈希）');
     res.json({ success: true });
   } else {
     res.status(500).json({ error: '保存密码失败' });
   }
 });
 
-// 验证密码
-app.post('/api/verify-password', async (req, res) => {
+app.post('/api/verify-password', loginLimiter, validatePassword, async (req, res) => {
   const { password } = req.body;
   const savedPassword = await loadAdminPassword();
 
@@ -508,53 +264,156 @@ app.post('/api/verify-password', async (req, res) => {
     return res.status(400).json({ success: false, error: '请先设置密码' });
   }
 
-  if (password === savedPassword) {
-    // 生成新的session token
-    const sessionToken = generateToken();
-    activeSessions.set(sessionToken, { createdAt: Date.now() });
-    console.log(`✅ 用户登录成功，生成Session: ${sessionToken.substring(0, 20)}...`);
+  const isValid = await verifyPassword(password, savedPassword);
+  if (isValid) {
+    // 迁移旧密码到哈希格式
+    if (!isHashed(savedPassword)) {
+      await saveAdminPassword(password);
+      console.log('🔐 密码已升级为哈希存储');
+    }
+
+    const sessionToken = await createSession();
+    console.log(`✅ 用户登录成功`);
     res.json({ success: true, sessionToken });
   } else {
+    const ip = req.ip || req.connection.remoteAddress;
+    sendWebhook(EVENTS.LOGIN_FAILED, { ip }).catch(() => {});
     res.status(401).json({ success: false, error: '密码错误' });
   }
 });
 
-// 获取所有账号（服务器存储 + 环境变量）
-app.get('/api/server-accounts', requireAuth, async (req, res) => {
-  const serverAccounts = await loadServerAccounts();
-  const envAccounts = getEnvAccounts();
-
-  // 合并账号，环境变量账号优先
-  const allAccounts = [...envAccounts, ...serverAccounts];
-  console.log(`📋 返回 ${allAccounts.length} 个账号 (环境变量: ${envAccounts.length}, 服务器: ${serverAccounts.length})`);
-  res.json(allAccounts);
+app.post('/api/logout', async (req, res) => {
+  const sessionToken = req.headers['x-session-token'];
+  if (sessionToken) {
+    await destroySession(sessionToken);
+  }
+  res.json({ success: true });
 });
 
-// 保存账号到服务器
-app.post('/api/server-accounts', requireAuth, async (req, res) => {
-  const { accounts } = req.body;
+// ==================== 账号 API ====================
 
+app.post('/api/temp-accounts', requireAuth, async (req, res) => {
+  const { accounts } = req.body;
   if (!accounts || !Array.isArray(accounts)) {
     return res.status(400).json({ error: '无效的账号列表' });
   }
 
+  const results = await Promise.all(accounts.map(async (account) => {
+    try {
+      const { user, projects, aihub } = await fetchAccountData(account.token);
+      let usageData = { totalUsage: 0, freeQuotaRemaining: 5, freeQuotaLimit: 5 };
+
+      if (user._id) {
+        try {
+          usageData = await fetchUsageData(account.token, user._id, projects);
+          // 记录用量历史
+          await db.recordUsage(account.name, usageData.totalUsage);
+          // 额度预警
+          if (usageData.freeQuotaRemaining < QUOTA_WARNING_THRESHOLD) {
+            sendWebhook(EVENTS.QUOTA_WARNING, {
+              accountName: account.name,
+              remaining: usageData.freeQuotaRemaining,
+              threshold: QUOTA_WARNING_THRESHOLD
+            }).catch(() => {});
+          }
+        } catch (e) {
+          console.log(`⚠️ [${account.name}] 获取用量失败:`, e.message);
+        }
+      }
+
+      const creditInCents = Math.round(usageData.freeQuotaRemaining * 100);
+      return {
+        name: account.name, success: true,
+        data: { ...user, credit: creditInCents, totalUsage: usageData.totalUsage, freeQuotaLimit: usageData.freeQuotaLimit },
+        aihub
+      };
+    } catch (error) {
+      return { name: account.name, success: false, error: error.message };
+    }
+  }));
+
+  res.json(results);
+});
+
+app.post('/api/temp-projects', requireAuth, async (req, res) => {
+  const { accounts } = req.body;
+  if (!accounts || !Array.isArray(accounts)) {
+    return res.status(400).json({ error: '无效的账号列表' });
+  }
+
+  const results = await Promise.all(accounts.map(async (account) => {
+    try {
+      const { user, projects } = await fetchAccountData(account.token);
+      let projectCosts = {};
+
+      if (user._id) {
+        try {
+          const usageData = await fetchUsageData(account.token, user._id, projects);
+          projectCosts = usageData.projectCosts;
+        } catch (e) {}
+      }
+
+      const projectsWithCost = projects.map(project => ({
+        _id: project._id, name: project.name,
+        region: project.region?.name || 'Unknown',
+        environments: project.environments || [],
+        services: project.services || [],
+        cost: projectCosts[project._id] || 0,
+        hasCostData: (projectCosts[project._id] || 0) > 0
+      }));
+
+      return { name: account.name, success: true, projects: projectsWithCost };
+    } catch (error) {
+      return { name: account.name, success: false, error: error.message };
+    }
+  }));
+
+  res.json(results);
+});
+
+app.post('/api/validate-account', requireAuth, async (req, res) => {
+  const { accountName, apiToken } = req.body;
+  if (!accountName || !apiToken) {
+    return res.status(400).json({ error: '账号名称和 API Token 不能为空' });
+  }
+
+  try {
+    const { user } = await fetchAccountData(apiToken);
+    if (user._id) {
+      res.json({ success: true, message: '账号验证成功！', userData: user, accountName, apiToken });
+    } else {
+      res.status(400).json({ error: 'API Token 无效或没有权限' });
+    }
+  } catch (error) {
+    res.status(400).json({ error: 'API Token 验证失败: ' + error.message });
+  }
+});
+
+app.get('/api/server-accounts', requireAuth, async (req, res) => {
+  const serverAccounts = await loadServerAccounts();
+  const envAccounts = getEnvAccounts();
+  const allAccounts = [...envAccounts, ...serverAccounts];
+  res.json(allAccounts);
+});
+
+app.post('/api/server-accounts', requireAuth, validateAccounts, async (req, res) => {
+  const { accounts } = req.body;
   if (await saveServerAccounts(accounts)) {
-    console.log(`✅ 保存 ${accounts.length} 个账号到服务器`);
+    sendWebhook(EVENTS.ACCOUNT_ADDED, { count: accounts.length }).catch(() => {});
     res.json({ success: true, message: '账号已保存到服务器' });
   } else {
     res.status(500).json({ error: '保存失败' });
   }
 });
 
-// 删除服务器账号
-app.delete('/api/server-accounts/:index', requireAuth, async (req, res) => {
+app.delete('/api/server-accounts/:index', requireAuth, validateIndex, async (req, res) => {
   const index = parseInt(req.params.index);
   const accounts = await loadServerAccounts();
 
   if (index >= 0 && index < accounts.length) {
     const removed = accounts.splice(index, 1);
     if (await saveServerAccounts(accounts)) {
-      console.log(`🗑️ 删除账号: ${removed[0].name}`);
+      sendWebhook(EVENTS.ACCOUNT_REMOVED, { accountName: removed[0].name }).catch(() => {});
       res.json({ success: true, message: '账号已删除' });
     } else {
       res.status(500).json({ error: '删除失败' });
@@ -564,27 +423,13 @@ app.delete('/api/server-accounts/:index', requireAuth, async (req, res) => {
   }
 });
 
-// 服务器配置的账号API（兼容旧版本）
-app.get('/api/accounts', async (req, res) => {
-  res.json([]);
-});
+// ==================== 服务操作 API ====================
 
-app.get('/api/projects', async (req, res) => {
-  res.json([]);
-});
-
-// 暂停服务
-app.post('/api/service/pause', requireAuth, async (req, res) => {
+app.post('/api/service/pause', requireAuth, validateServiceAction, async (req, res) => {
   const { token, serviceId, environmentId } = req.body;
-  
-  if (!token || !serviceId || !environmentId) {
-    return res.status(400).json({ error: '缺少必要参数' });
-  }
-  
   try {
     const mutation = `mutation { suspendService(serviceID: "${serviceId}", environmentID: "${environmentId}") }`;
     const result = await queryZeabur(token, mutation);
-    
     if (result.data?.suspendService) {
       res.json({ success: true, message: '服务已暂停' });
     } else {
@@ -595,18 +440,11 @@ app.post('/api/service/pause', requireAuth, async (req, res) => {
   }
 });
 
-// 重启服务
-app.post('/api/service/restart', requireAuth, async (req, res) => {
+app.post('/api/service/restart', requireAuth, validateServiceAction, async (req, res) => {
   const { token, serviceId, environmentId } = req.body;
-  
-  if (!token || !serviceId || !environmentId) {
-    return res.status(400).json({ error: '缺少必要参数' });
-  }
-  
   try {
     const mutation = `mutation { restartService(serviceID: "${serviceId}", environmentID: "${environmentId}") }`;
     const result = await queryZeabur(token, mutation);
-    
     if (result.data?.restartService) {
       res.json({ success: true, message: '服务已重启' });
     } else {
@@ -617,45 +455,20 @@ app.post('/api/service/restart', requireAuth, async (req, res) => {
   }
 });
 
-// 获取服务日志
-app.post('/api/service/logs', requireAuth, express.json(), async (req, res) => {
+app.post('/api/service/logs', requireAuth, validateLogsQuery, async (req, res) => {
   const { token, serviceId, environmentId, projectId, limit = 200 } = req.body;
-  
-  if (!token || !serviceId || !environmentId || !projectId) {
-    return res.status(400).json({ error: '缺少必要参数' });
-  }
-  
   try {
-    const query = `
-      query {
-        runtimeLogs(
-          projectID: "${projectId}"
-          serviceID: "${serviceId}"
-          environmentID: "${environmentId}"
-        ) {
-          message
-          timestamp
-        }
+    const query = `query {
+      runtimeLogs(projectID: "${projectId}", serviceID: "${serviceId}", environmentID: "${environmentId}") {
+        message timestamp
       }
-    `;
-    
+    }`;
     const result = await queryZeabur(token, query);
-    
+
     if (result.data?.runtimeLogs) {
-      // 按时间戳排序，最新的在最后
-      const sortedLogs = result.data.runtimeLogs.sort((a, b) => {
-        return new Date(a.timestamp) - new Date(b.timestamp);
-      });
-      
-      // 获取最后 N 条日志
+      const sortedLogs = result.data.runtimeLogs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
       const logs = sortedLogs.slice(-limit);
-      
-      res.json({ 
-        success: true, 
-        logs,
-        count: logs.length,
-        totalCount: result.data.runtimeLogs.length
-      });
+      res.json({ success: true, logs, count: logs.length, totalCount: result.data.runtimeLogs.length });
     } else {
       res.status(400).json({ error: '获取日志失败', details: result });
     }
@@ -664,58 +477,128 @@ app.post('/api/service/logs', requireAuth, express.json(), async (req, res) => {
   }
 });
 
-// 重命名项目
-app.post('/api/project/rename', requireAuth, async (req, res) => {
+app.post('/api/project/rename', requireAuth, validateRename, async (req, res) => {
   const { accountId, projectId, newName } = req.body;
-
-  console.log(`📝 收到重命名请求: accountId=${accountId}, projectId=${projectId}, newName=${newName}`);
-
-  if (!accountId || !projectId || !newName) {
-    return res.status(400).json({ error: '缺少必要参数' });
-  }
-
   try {
-    // 从服务器存储中获取账号token
     const serverAccounts = await loadServerAccounts();
     const account = serverAccounts.find(acc => (acc.id || acc.name) === accountId);
-    
     if (!account || !account.token) {
       return res.status(404).json({ error: '未找到账号或token' });
     }
-    
+
     const mutation = `mutation { renameProject(_id: "${projectId}", name: "${newName}") }`;
-    console.log(`🔍 发送 GraphQL mutation:`, mutation);
-    
     const result = await queryZeabur(account.token, mutation);
-    console.log(`📥 API 响应:`, JSON.stringify(result, null, 2));
-    
+
     if (result.data?.renameProject) {
-      console.log(`✅ 项目已重命名: ${newName}`);
       res.json({ success: true, message: '项目已重命名' });
     } else {
-      console.log(`❌ 重命名失败:`, result);
       res.status(400).json({ error: '重命名失败', details: result });
     }
   } catch (error) {
-    console.log(`❌ 异常:`, error);
     res.status(500).json({ error: '重命名项目失败: ' + error.message });
   }
 });
 
-// 获取当前版本
+// ==================== 数据可视化 API ====================
+
+app.get('/api/usage-history', requireAuth, async (req, res) => {
+  const { account, days = 30 } = req.query;
+  try {
+    const history = await db.getUsageHistory(account, parseInt(days));
+    res.json({ success: true, data: history });
+  } catch (error) {
+    res.status(500).json({ error: '获取用量历史失败: ' + error.message });
+  }
+});
+
+// ==================== Webhook API ====================
+
+app.get('/api/webhooks', requireAuth, async (req, res) => {
+  const webhooks = await db.getWebhooks();
+  res.json(webhooks.map(w => ({ ...w, secret: w.secret ? '******' : null })));
+});
+
+app.post('/api/webhooks', requireAuth, validateWebhook, async (req, res) => {
+  const { url, name, secret, events } = req.body;
+  const crypto = require('crypto');
+  const id = crypto.randomBytes(8).toString('hex');
+  const webhook = { id, url, name, secret, events, enabled: true, createdAt: Date.now() };
+
+  if (await db.saveWebhook(webhook)) {
+    // 更新内存中的 webhook 配置
+    const webhooks = await db.getWebhooks();
+    setWebhookConfigs(webhooks);
+    res.json({ success: true, id });
+  } else {
+    res.status(500).json({ error: '保存 Webhook 失败' });
+  }
+});
+
+app.delete('/api/webhooks/:id', requireAuth, async (req, res) => {
+  if (await db.deleteWebhook(req.params.id)) {
+    const webhooks = await db.getWebhooks();
+    setWebhookConfigs(webhooks);
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ error: 'Webhook 不存在' });
+  }
+});
+
+app.post('/api/webhooks/test', requireAuth, async (req, res) => {
+  const { url, secret } = req.body;
+  const result = await testWebhook(url, secret);
+  res.json(result);
+});
+
+// ==================== 多用户 API ====================
+
+app.get('/api/users', requireAuth, async (req, res) => {
+  const users = await db.getUsers();
+  res.json(users);
+});
+
+app.post('/api/users', requireAuth, async (req, res) => {
+  const { username, password, role = 'user' } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: '用户名和密码不能为空' });
+  }
+
+  try {
+    const passwordHash = await hashPassword(password);
+    const userId = await db.createUser(username, passwordHash, role);
+    res.json({ success: true, userId });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.delete('/api/users/:id', requireAuth, async (req, res) => {
+  const userId = parseInt(req.params.id);
+  if (await db.deleteUser(userId)) {
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ error: '用户不存在' });
+  }
+});
+
+// ==================== 兼容旧版本 ====================
+
+app.get('/api/accounts', async (req, res) => res.json([]));
+app.get('/api/projects', async (req, res) => res.json([]));
+
+// ==================== 版本信息 ====================
+
 app.get('/api/version', (req, res) => {
   const packageJson = require('./package.json');
   res.json({ version: packageJson.version });
 });
 
-// 获取GitHub最新版本
 app.get('/api/latest-version', async (req, res) => {
   try {
     const options = {
       hostname: 'raw.githubusercontent.com',
       path: '/jiujiu532/zeabur-monitor/main/package.json',
-      method: 'GET',
-      timeout: 5000
+      method: 'GET', timeout: 5000
     };
 
     const request = https.request(options, (response) => {
@@ -723,50 +606,50 @@ app.get('/api/latest-version', async (req, res) => {
       response.on('data', (chunk) => data += chunk);
       response.on('end', () => {
         try {
-          const packageJson = JSON.parse(data);
-          res.json({ version: packageJson.version });
+          res.json({ version: JSON.parse(data).version });
         } catch (e) {
           res.status(500).json({ error: '解析版本信息失败' });
         }
       });
     });
 
-    request.on('error', (error) => {
-      res.status(500).json({ error: '获取最新版本失败: ' + error.message });
-    });
-
-    request.on('timeout', () => {
-      request.destroy();
-      res.status(500).json({ error: '请求超时' });
-    });
-
+    request.on('error', (error) => res.status(500).json({ error: '获取最新版本失败: ' + error.message }));
+    request.on('timeout', () => { request.destroy(); res.status(500).json({ error: '请求超时' }); });
     request.end();
   } catch (error) {
     res.status(500).json({ error: '获取最新版本失败: ' + error.message });
   }
 });
 
-// 启动服务器
+// ==================== 系统状态 ====================
+
+app.get('/api/status', requireAuth, async (req, res) => {
+  const { getActiveSessionCount } = require('./session-store');
+  res.json({
+    database: db.isDatabaseEnabled() ? 'PostgreSQL' : 'File',
+    session: isRedisSessionEnabled() ? 'Redis' : 'Memory',
+    encryption: ENCRYPTION_ENABLED,
+    activeSessions: await getActiveSessionCount(),
+    quotaWarningThreshold: QUOTA_WARNING_THRESHOLD
+  });
+});
+
+// ==================== 启动服务器 ====================
+
 async function startServer() {
-  // 初始化数据库（如果配置了 DATABASE_URL）
   await db.initDatabase();
+  await initSessionStore();
+
+  // 加载 Webhook 配置
+  const webhooks = await db.getWebhooks();
+  setWebhookConfigs(webhooks);
 
   app.listen(PORT, '0.0.0.0', async () => {
-    console.log(`✨ Zeabur Monitor 运行在 http://0.0.0.0:${PORT}`);
-
-    // 显示存储模式
-    if (db.isDatabaseEnabled()) {
-      console.log(`🐘 数据存储: PostgreSQL`);
-    } else {
-      console.log(`📁 数据存储: 文件系统`);
-    }
-
-    // 显示加密状态
-    if (ENCRYPTION_ENABLED) {
-      console.log(`🔐 Token 加密存储: 已启用 (AES-256-GCM)`);
-    } else {
-      console.log(`⚠️  Token 加密存储: 未启用 (建议设置 ACCOUNTS_SECRET 环境变量)`);
-    }
+    console.log(`✨ Zeabur Monitor v2.0 运行在 http://0.0.0.0:${PORT}`);
+    console.log(`📁 数据存储: ${db.isDatabaseEnabled() ? 'PostgreSQL' : '文件系统'}`);
+    console.log(`📝 Session: ${isRedisSessionEnabled() ? 'Redis' : '内存'}`);
+    console.log(`🔐 Token 加密: ${ENCRYPTION_ENABLED ? '已启用' : '未启用'}`);
+    console.log(`🔔 Webhook: ${webhooks.length} 个配置`);
 
     const envAccounts = getEnvAccounts();
     const serverAccounts = await loadServerAccounts();
@@ -774,22 +657,15 @@ async function startServer() {
 
     if (totalAccounts > 0) {
       console.log(`📋 已加载 ${totalAccounts} 个账号`);
-      if (envAccounts.length > 0) {
-        console.log(`   环境变量: ${envAccounts.length} 个`);
-        envAccounts.forEach(acc => console.log(`     - ${acc.name}`));
-      }
-      if (serverAccounts.length > 0) {
-        console.log(`   服务器存储: ${serverAccounts.length} 个`);
-        serverAccounts.forEach(acc => console.log(`     - ${acc.name}`));
-      }
     } else {
       console.log(`📊 准备就绪，等待添加账号...`);
     }
   });
 }
 
-// 启动
 startServer().catch(err => {
   console.error('❌ 启动失败:', err.message);
   process.exit(1);
 });
+
+module.exports = app; // 用于测试
