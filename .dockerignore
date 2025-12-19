@@ -1,6 +1,10 @@
 # 依赖
 node_modules/
 npm-debug.log*
+client/node_modules/
+
+# 构建产物（Docker 内部构建，无需本地产物）
+client/dist/
 
 # Git
 .git/
@@ -38,3 +42,7 @@ zbpack.json
 
 # 开发工具
 .claude/
+
+# 测试
+coverage/
+__tests__/

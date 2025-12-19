@@ -1,4 +1,4 @@
 {
-  "build_command": "npm install",
+  "build_command": "npm ci && cd client && npm ci && npm run build",
   "start_command": "npm start"
 }

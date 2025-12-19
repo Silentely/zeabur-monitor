@@ -46,17 +46,33 @@
 git clone https://github.com/jiujiu532/zeabur-monitor.git
 cd zeabur-monitor
 
-# 2. 安装依赖
+# 2. 安装后端依赖
 npm install
 
-# 3. 启动服务
+# 3. 安装前端依赖并构建
+cd client && npm install && npm run build && cd ..
+
+# 4. 启动服务
 npm start
 
-# 4. 访问应用
+# 5. 访问应用
 # 打开浏览器访问：http://localhost:3000
 ```
 
+### 开发模式
+
+```bash
+# 后端开发（热重载）
+npm run dev
+
+# 前端开发（需要在另一个终端）
+cd client && npm run dev
+# 前端开发服务器运行在 http://localhost:5173
+```
+
 ### Docker 部署
+
+Docker 采用多阶段构建，自动编译 React 前端并打包到生产镜像中。
 
 #### 使用 Docker Compose（推荐）
 
@@ -73,7 +89,7 @@ touch accounts.json password.json
 openssl rand -hex 32
 # 创建 .env 文件并设置 ACCOUNTS_SECRET
 
-# 4. 启动服务
+# 4. 启动服务（自动构建前端）
 docker compose up -d
 
 # 5. 访问应用
@@ -83,7 +99,7 @@ docker compose up -d
 #### 使用 Docker 命令
 
 ```bash
-# 构建镜像
+# 构建镜像（包含前端编译）
 docker build -t zeabur-monitor .
 
 # 运行容器
@@ -95,6 +111,8 @@ docker run -d \
   -e ACCOUNTS_SECRET=your_64_char_hex_key \
   zeabur-monitor
 ```
+
+> **注意**：Docker 镜像使用非 root 用户运行，提升安全性。
 
 #### Docker 环境变量说明
 
@@ -195,37 +213,41 @@ REDIS_COMMAND_TIMEOUT=5000
 
 ## 🔧 技术栈
 
-- **后端**：Node.js + Express
-- **前端**：Vue.js 3 (CDN)
+- **后端**：Node.js 18+ + Express
+- **前端**：React 18 + TypeScript + Vite + TailwindCSS
 - **数据库**：PostgreSQL（可选）
 - **缓存**：Redis（可选，支持 TLS）
 - **API**：Zeabur GraphQL API
-- **样式**：原生 CSS（玻璃拟态效果）
+- **构建**：多阶段 Docker 构建，自动编译前端
 
 ## 📁 项目结构
 
 ```
 zeabur-monitor/
-├── public/
-│   ├── index.html      # 前端页面
-│   ├── bg.png          # 背景图片
-│   └── favicon.png     # 网站图标
-├── server.js           # 后端服务
-├── db.js               # 数据库存储模块
-├── redis-client.js     # Redis 客户端模块
-├── cache.js            # 缓存模块
-├── session-store.js    # Session 存储模块
-├── crypto-utils.js     # 加密工具模块
-├── package.json        # 项目配置
-├── Dockerfile          # Docker 镜像配置
-├── docker-compose.yml          # Docker Compose 配置（文件存储）
-├── docker-compose.postgres.yml # Docker Compose 配置（PostgreSQL + Redis）
-├── .dockerignore       # Docker 忽略规则
-├── .env.example        # 环境变量示例
-├── .gitignore          # Git 忽略规则
-├── zbpack.json         # Zeabur 配置
-├── README.md           # 项目说明
-└── DEPLOY.md           # 部署指南
+├── client/                 # React 前端应用
+│   ├── src/               # 源代码
+│   │   ├── components/    # React 组件
+│   │   ├── hooks/         # 自定义 Hooks
+│   │   ├── types/         # TypeScript 类型定义
+│   │   ├── utils/         # 工具函数
+│   │   ├── App.tsx        # 应用入口组件
+│   │   └── main.tsx       # 应用入口
+│   ├── package.json       # 前端依赖配置
+│   └── vite.config.ts     # Vite 构建配置
+├── server.js              # 后端服务入口
+├── db.js                  # 数据库存储模块
+├── cache.js               # 缓存模块
+├── redis-client.js        # Redis 客户端模块
+├── session-store.js       # Session 存储模块
+├── crypto-utils.js        # 加密工具模块
+├── password-utils.js      # 密码工具模块
+├── middleware.js          # Express 中间件
+├── notifications.js       # 通知模块
+├── package.json           # 后端依赖配置
+├── Dockerfile             # 多阶段 Docker 构建配置
+├── docker-compose.yml     # Docker Compose 配置
+├── zbpack.json            # Zeabur 部署配置
+└── README.md              # 项目说明
 ```
 
 ## 🔒 安全说明

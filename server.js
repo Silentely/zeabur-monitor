@@ -94,7 +94,14 @@ async function requireAuth(req, res, next) {
 
 // ==================== 静态文件 ====================
 
-app.use(express.static('public'));
+const path = require('path');
+app.use(express.static(path.join(__dirname, 'client/dist')));
+
+// 所有非 API 请求返回 React 前端
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api')) return next();
+  res.sendFile(path.join(__dirname, 'client/dist/index.html'));
+});
 
 // ==================== Zeabur API ====================
 

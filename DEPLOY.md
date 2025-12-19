@@ -47,9 +47,9 @@
 ### 步骤 3：等待部署
 
 - Zeabur 会自动检测项目类型（Node.js）
-- 自动安装依赖（`npm install`）
+- 自动安装依赖并构建前端（`npm ci && cd client && npm ci && npm run build`）
 - 自动启动服务（`npm start`）
-- 整个过程大约需要 1-3 分钟
+- 整个过程大约需要 2-5 分钟（首次构建前端需要更长时间）
 
 ### 步骤 4：生成访问域名
 
@@ -83,15 +83,19 @@
 
 ### zbpack.json 配置
 
-项目已包含 `zbpack.json` 配置文件，Zeabur 会自动识别：
+项目已包含 `zbpack.json` 配置文件，Zeabur 会自动识别并执行前端构建：
 
 ```json
 {
-  "build_command": "npm install",
-  "start_command": "node server.js",
-  "install_command": "npm install"
+  "build_command": "npm ci && cd client && npm ci && npm run build",
+  "start_command": "npm start"
 }
 ```
+
+**说明**：
+- `npm ci`：使用 `package-lock.json` 精确安装依赖，确保一致性
+- `cd client && npm ci && npm run build`：进入前端目录，安装依赖并构建 React 应用
+- 构建产物位于 `client/dist/`，由后端 Express 服务托管
 
 ## 常见问题
 
