@@ -13,7 +13,7 @@ const ServiceItem = ({ service, account, project, onLogs }) => {
 
   const handleAction = (action) => {
     if (!confirm(`确定要${action === 'pause' ? '暂停' : '重启'}服务 "${service.name}" 吗?`)) return
-    
+
     const envId = project.environments?.[0]?._id
     if (!envId) return toast.error('无法获取环境ID')
 
@@ -33,6 +33,9 @@ const ServiceItem = ({ service, account, project, onLogs }) => {
     building: 'warning'
   }[service.status] || 'secondary'
 
+  // 获取该服务的域名
+  const domains = (service.domains || []).filter(d => d.domain)
+
   return (
     <div className="group flex flex-col gap-2 p-3 rounded-lg border bg-slate-50/50 dark:bg-slate-900/50 hover:bg-white dark:hover:bg-slate-800 transition-all shadow-sm hover:shadow-md">
       <div className="flex items-center justify-between">
@@ -41,7 +44,26 @@ const ServiceItem = ({ service, account, project, onLogs }) => {
           {service.status}
         </Badge>
       </div>
-      
+
+      {/* 服务域名 */}
+      {domains.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {domains.map((d, i) => (
+            <a
+              key={i}
+              href={`https://${d.domain}`}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-1 text-[10px] text-slate-500 hover:text-primary transition-colors truncate max-w-full"
+              title={d.domain}
+            >
+              <Globe className="h-3 w-3 flex-shrink-0" />
+              <span className="truncate">{d.domain}</span>
+            </a>
+          ))}
+        </div>
+      )}
+
       <div className="flex gap-1 mt-auto opacity-80 group-hover:opacity-100 transition-opacity">
         {service.status === 'RUNNING' && (
           <Button 
@@ -96,16 +118,15 @@ const ProjectCard = ({ project, account, onLogs }) => {
       setIsEditing(false)
       return
     }
-    rename({ 
-      accountId: account.id || account.name, 
-      projectId: project._id, 
-      newName: editName 
+    rename({
+      accountId: account.id || account.name,
+      projectId: project._id,
+      newName: editName
     }, {
       onSuccess: () => setIsEditing(false)
     })
   }
 
-  const domains = project.services?.flatMap(s => s.domains || []).filter(d => d.domain) || []
   const cost = project.cost || 0
   const runningCount = project.services?.filter(s => s.status === 'RUNNING').length || 0
 
@@ -162,7 +183,7 @@ const ProjectCard = ({ project, account, onLogs }) => {
         </div>
 
         {/* Services */}
-        <div className="grid grid-cols-1 gap-2 mb-4 flex-1 content-start">
+        <div className="grid grid-cols-1 gap-2 flex-1 content-start">
           {project.services?.length > 0 ? (
             project.services.map(service => (
               <ServiceItem key={service._id} service={service} account={account} project={project} onLogs={onLogs} />
@@ -173,25 +194,6 @@ const ProjectCard = ({ project, account, onLogs }) => {
             </div>
           )}
         </div>
-
-        {/* Domains */}
-        {domains.length > 0 && (
-          <div className="mt-auto pt-3 border-t grid gap-1">
-            {domains.map((d, i) => (
-              <a 
-                key={i} 
-                href={`https://${d.domain}`} 
-                target="_blank" 
-                rel="noreferrer"
-                className="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300 hover:text-primary transition-colors truncate bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded"
-              >
-                <Globe className="h-3 w-3 flex-shrink-0" />
-                <span className="truncate">{d.domain}</span>
-                {d.isGenerated && <span className="text-[9px] bg-slate-200 dark:bg-slate-700 px-1 rounded ml-auto">自动</span>}
-              </a>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   )
